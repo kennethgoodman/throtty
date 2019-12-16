@@ -2,16 +2,14 @@ package main
 
 import (
     "context"
-    "fmt"
-    "github.com/kennethgoodman/throtty/db"
-    "github.com/kennethgoodman/throtty/throttler"
-    uuid "github.com/satori/go.uuid"
-    "github.com/tidwall/buntdb"
     "log"
     "net/http"
     "os"
     "time"
 
+    "github.com/kennethgoodman/throtty/db"
+    "github.com/kennethgoodman/throtty/throttler"
+    "github.com/tidwall/buntdb"
     "go.uber.org/fx"
 )
 
@@ -181,20 +179,6 @@ func Register(mux *http.ServeMux, h http.Handler) {
     mux.Handle("/", h)
 }
 
-func sendRequest(endpointUUID uuid.UUID) *http.Response {
-    client := &http.Client{}
-    req, err := http.NewRequest("GET", "http://localhost:8080/", nil)
-    if err != nil {
-        panic(err)
-    }
-    req.Header.Add(throttler.EndpointUUIDHeader, endpointUUID.String())
-    resp, err := client.Do(req)
-    if err != nil {
-        panic(err)
-    }
-    return resp
-}
-
 func main() {
     app := fx.New(
         // Provide all the constructors we need, which teaches Fx how we'd like to
@@ -227,25 +211,8 @@ func main() {
         log.Fatal(err)
     }
 
-
-
-    // we'll make an HTTP request to demonstrate that our server is running.
-    endpointUUID, err := uuid.NewV4()
-    if err != nil {
-        panic(err)
-    }
-    resp := sendRequest(endpointUUID)
-    fmt.Printf("resp 1: %+v\n", resp)
-    resp = sendRequest(endpointUUID)
-    fmt.Printf("resp 2: %+v\n", resp)
-    resp = sendRequest(endpointUUID)
-    fmt.Printf("resp 3: %+v\n", resp)
-    resp = sendRequest(endpointUUID)
-    fmt.Printf("resp 4: %+v\n", resp)
-    resp = sendRequest(endpointUUID)
-    fmt.Printf("resp 5: %+v\n", resp)
-    resp = sendRequest(endpointUUID)
-    fmt.Printf("resp 6: %+v\n", resp)
+    //resp, err := http.Get("http://localhost:8080/")
+    //fmt.Printf("r: %+v, e:%+v\n", resp, err)
     <- app.Done()  // block
 
     stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

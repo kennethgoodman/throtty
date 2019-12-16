@@ -3,14 +3,12 @@ package db
 import (
 	uuid "github.com/satori/go.uuid"
 	"github.com/tidwall/buntdb"
-	"strconv"
+	"strings"
+	"time"
 )
 
 type DAL interface {
-	GetNumberOfRequestsForEndpoint(endpointUUID uuid.UUID) (*int, error)
-	GetNumberOfRequestsForUser(userUUID uuid.UUID) (*int, error)
-
-	AddRequest(requestUUID, endpointUUID, userUUID *uuid.UUID) error
+	GetNumberAndAddRequest(requestUUID, endpointUUID, userUUID *uuid.UUID) (*int, error)
 }
 
 type dal struct {
@@ -23,62 +21,43 @@ func NewDAL(db *buntdb.DB) DAL {
 	}
 }
 
-func (d *dal) GetNumberOfRequestsForEndpoint(endpointUUID uuid.UUID) (*int, error) {
-	return d.getNumberOfRequestsForCol(&endpointUUID)
-}
-
-func (d *dal) GetNumberOfRequestsForUser(userUUID uuid.UUID) (*int, error) {
-	return d.getNumberOfRequestsForCol(&userUUID)
-}
-
-func (d *dal) AddRequest(requestUUID, endpointUUID, userUUID *uuid.UUID) error {
-	return d.incrementEndpointUUID(endpointUUID)
-}
-
-func (d *dal) getNumberOfRequestsForColWithTx(tx *buntdb.Tx, id *uuid.UUID) (*int, error) {
-	val, err := tx.Get(id.String())
-	zero := 0
-	if err == buntdb.ErrNotFound {
-		return &zero, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if val != "" {
-		v, err := strconv.Atoi(val)
-		return &v, err
-	}
-	return &zero, nil
-}
-
-func (d *dal) getNumberOfRequestsForCol(id *uuid.UUID) (*int, error) {
-	currentCount := 0
-	err := d.db.View(func(tx *buntdb.Tx) error {
-		currentCountPtr, err := d.getNumberOfRequestsForColWithTx(tx, id)
-		if err == nil && currentCountPtr != nil {
-			currentCount = *currentCountPtr
-		}
-		return err
-	})
-	return &currentCount, err
-}
-
-func (d *dal) incrementEndpointUUID(endpointUUID *uuid.UUID) error {
-	return d.changeCount(endpointUUID, 1)
-}
-
-func (d *dal) decrementEndpointUUID(endpointUUID *uuid.UUID) error {
-	return d.changeCount(endpointUUID, -1)
-}
-
-func (d *dal) changeCount(key *uuid.UUID, countChangeBy int) error {
-	return d.db.Update(func(tx *buntdb.Tx) error {
-		currentCountPtr, err := d.getNumberOfRequestsForColWithTx(tx, key)
+func (d *dal) GetNumberAndAddRequest(requestUUID, endpointUUID, userUUID *uuid.UUID) (*int, error) {
+	count := 0
+	err := d.db.Update(func(tx *buntdb.Tx) error {
+		newRequestUUIDs, err := d.getRequestsStillValid(tx, endpointUUID)
 		if err != nil {
 			return err
 		}
-		_, _, err = tx.Set(key.String(), strconv.Itoa(*currentCountPtr + countChangeBy), nil)
+		count = len(newRequestUUIDs)
+		_, _, err = tx.Set(endpointUUID.String(),
+			strings.Join(append(newRequestUUIDs, requestUUID.String()), ";"), nil)
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.Set(requestUUID.String(), "", &buntdb.SetOptions{Expires:true, TTL:time.Second * 1000})
+		if err != nil {
+			// TODO if this fails, should we rollback?
+		}
 		return err
 	})
+	return &count, err
+}
+
+func (d *dal) getRequestsStillValid(tx *buntdb.Tx, endpointUUID *uuid.UUID) ([]string, error) {
+	v, err := tx.Get(endpointUUID.String())
+	if err == buntdb.ErrNotFound {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	requestUUIDs := strings.Split(v, ";")
+	newRequestUUIDs := make([]string, 0)
+	for _, requestUUID := range requestUUIDs {
+		_, err := tx.Get(requestUUID)
+		if err != nil {
+			continue
+		}
+		newRequestUUIDs = append(newRequestUUIDs, requestUUID)
+	}
+	return newRequestUUIDs, nil
 }

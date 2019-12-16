@@ -35,22 +35,18 @@ func (t *throttler) IsValidRequest(request *http.Request) (*bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := t.dal.GetNumberOfRequestsForEndpoint(endpointUUID)
+
+	requestUUID, _ := uuid.NewV4()
+	userUUID, err := uuid.FromString(request.Header.Get(UserUUIDHeader))
+	var c *int
+	if err != nil {
+		c, err = t.dal.GetNumberAndAddRequest(&requestUUID, &endpointUUID, nil)
+	} else {
+		c, err = t.dal.GetNumberAndAddRequest(&requestUUID, &endpointUUID, &userUUID)
+	}
 	if err != nil {
 		return nil, err
 	}
 	isValid := *c < maxAllowedCount
-	if isValid {
-		requestUUID, _ := uuid.NewV4()
-		userUUID, err := uuid.FromString(request.Header.Get(UserUUIDHeader))
-		if err != nil {
-			err = t.dal.AddRequest(&requestUUID, &endpointUUID, nil)
-		} else {
-			err = t.dal.AddRequest(&requestUUID, &endpointUUID, &userUUID)
-		}
-		if err != nil {
-			t.Logger.Printf("[ERROR] Got an err when trying to add request: %s", err.Error())
-		}
-	}
 	return &isValid, nil
 }
