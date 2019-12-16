@@ -2,6 +2,11 @@ package main
 
 import (
     "context"
+    "fmt"
+    "github.com/kennethgoodman/throtty/db"
+    "github.com/kennethgoodman/throtty/throttler"
+    uuid "github.com/satori/go.uuid"
+    "github.com/tidwall/buntdb"
     "log"
     "net/http"
     "os"
@@ -29,6 +34,14 @@ func NewLogger() *log.Logger {
     logger := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
     logger.Print("Executing NewLogger.")
     return logger
+}
+
+func NewDB() *buntdb.DB {
+    memDB, err := db.InitDB()
+    if err != nil {
+        panic(err)
+    }
+    return memDB
 }
 
 // NewHandler constructs a simple HTTP handler. Since it returns an
@@ -59,10 +72,21 @@ func NewLogger() *log.Logger {
 // constructors for a single type, NewHandlerAndLogger would be called at most
 // once, and both the handler and the logger would be cached and reused as
 // necessary.
-func NewHandler(logger *log.Logger) (http.Handler, error) {
+func NewHandler(logger *log.Logger, throttler2 throttler.Throttler) (http.Handler, error) {
     logger.Print("Executing NewHandler.")
-    return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+    return http.HandlerFunc(func(resp http.ResponseWriter, request *http.Request) {
         logger.Print("Got a request.")
+        goodRequest, err := throttler2.IsValidRequest(request)
+        if err != nil {
+            resp.WriteHeader(http.StatusUnauthorized)
+        }
+        if goodRequest == nil {
+            resp.WriteHeader(http.StatusUnauthorized)
+        } else if *goodRequest == true {
+            resp.WriteHeader(http.StatusAccepted)
+        } else {
+            resp.WriteHeader(http.StatusUnauthorized)
+        }
     }), nil
 }
 
@@ -157,6 +181,20 @@ func Register(mux *http.ServeMux, h http.Handler) {
     mux.Handle("/", h)
 }
 
+func sendRequest(endpointUUID uuid.UUID) *http.Response {
+    client := &http.Client{}
+    req, err := http.NewRequest("GET", "http://localhost:8080/", nil)
+    if err != nil {
+        panic(err)
+    }
+    req.Header.Add(throttler.EndpointUUIDHeader, endpointUUID.String())
+    resp, err := client.Do(req)
+    if err != nil {
+        panic(err)
+    }
+    return resp
+}
+
 func main() {
     app := fx.New(
         // Provide all the constructors we need, which teaches Fx how we'd like to
@@ -165,6 +203,9 @@ func main() {
         // much on its own.
         fx.Provide(
             NewLogger,
+            NewDB,
+            db.NewDAL,
+            throttler.NewThrottler,
             NewHandler,
             NewMux,
         ),
@@ -186,14 +227,30 @@ func main() {
         log.Fatal(err)
     }
 
-    // Normally, we'd block here with <-app.Done(). Instead, we'll make an HTTP
-    // request to demonstrate that our server is running.
-    http.Get("http://localhost:8080/")
+
+
+    // we'll make an HTTP request to demonstrate that our server is running.
+    endpointUUID, err := uuid.NewV4()
+    if err != nil {
+        panic(err)
+    }
+    resp := sendRequest(endpointUUID)
+    fmt.Printf("resp 1: %+v\n", resp)
+    resp = sendRequest(endpointUUID)
+    fmt.Printf("resp 2: %+v\n", resp)
+    resp = sendRequest(endpointUUID)
+    fmt.Printf("resp 3: %+v\n", resp)
+    resp = sendRequest(endpointUUID)
+    fmt.Printf("resp 4: %+v\n", resp)
+    resp = sendRequest(endpointUUID)
+    fmt.Printf("resp 5: %+v\n", resp)
+    resp = sendRequest(endpointUUID)
+    fmt.Printf("resp 6: %+v\n", resp)
+    <- app.Done()  // block
 
     stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
     defer cancel()
     if err := app.Stop(stopCtx); err != nil {
         log.Fatal(err)
     }
-
 }
